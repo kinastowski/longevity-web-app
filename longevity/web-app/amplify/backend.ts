@@ -48,6 +48,8 @@ new Rule(warmupStack, "WarmupRule", {
 });
 
 // Inject real CDK-token ARNs — no TODO placeholders
+// Cast needed: resources.lambda is typed as IFunction (interface), which lacks addEnvironment.
+// Amplify defineFunction always returns a concrete Function, so the cast is safe.
 const warmupLambda = backend.auroraWarmup.resources.lambda as LambdaFunction;
 warmupLambda.addEnvironment("AURORA_CLUSTER_ARN", cluster.clusterArn);
 warmupLambda.addEnvironment("AURORA_SECRET_ARN", cluster.secret.secretArn);
