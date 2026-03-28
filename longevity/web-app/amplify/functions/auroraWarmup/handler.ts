@@ -3,7 +3,7 @@ import {
   ExecuteStatementCommand,
 } from "@aws-sdk/client-rds-data";
 
-const client = new RDSDataClient({ region: "eu-central-1" });
+const client = new RDSDataClient({ region: process.env.AWS_REGION ?? "eu-central-1" });
 
 export const handler = async () => {
   try {
