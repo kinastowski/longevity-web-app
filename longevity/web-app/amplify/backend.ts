@@ -6,12 +6,18 @@ import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Rule, Schedule } from "aws-cdk-lib/aws-events";
 import { LambdaFunction as LambdaTarget } from "aws-cdk-lib/aws-events-targets";
+import { createAuroraCluster } from "./aurora/resource";
 
 const backend = defineBackend({
   auth,
   data,
   auroraWarmup,
 });
+
+// Aurora Serverless v2 — provisioned via CDK, no manual console steps
+const auroraStack = backend.createStack("aurora");
+const { cluster } = createAuroraCluster(auroraStack);
+if (!cluster.secret) throw new Error("Aurora cluster has no managed secret");
 
 const bedrockPolicy = new PolicyStatement({
   effect: Effect.ALLOW,
@@ -41,13 +47,21 @@ new Rule(warmupStack, "WarmupRule", {
   targets: [new LambdaTarget(backend.auroraWarmup.resources.lambda)],
 });
 
+// Inject real CDK-token ARNs — no TODO placeholders
+const warmupLambda = backend.auroraWarmup.resources.lambda as LambdaFunction;
+warmupLambda.addEnvironment("AURORA_CLUSTER_ARN", cluster.clusterArn);
+warmupLambda.addEnvironment("AURORA_SECRET_ARN", cluster.secret.secretArn);
+
+// Tighten IAM: specific cluster ARN instead of wildcard
 backend.auroraWarmup.resources.lambda.addToRolePolicy(
   new PolicyStatement({
     effect: Effect.ALLOW,
     actions: ["rds-data:ExecuteStatement"],
-    resources: ["arn:aws:rds:eu-central-1:*:cluster:*"],
+    resources: [cluster.clusterArn],
   })
 );
+
+cluster.secret.grantRead(backend.auroraWarmup.resources.lambda);
 
 // ConversationHandlerFunction (from @aws-amplify/ai-constructs) does NOT call
 // setResourceName(), so the Lambda and its role are invisible to
