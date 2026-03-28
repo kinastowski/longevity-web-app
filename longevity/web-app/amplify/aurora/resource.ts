@@ -23,7 +23,7 @@ export function createAuroraCluster(stack: Stack) {
 
   const cluster = new DatabaseCluster(stack, "AuroraCluster", {
     engine: DatabaseClusterEngine.auroraPostgres({
-      version: AuroraPostgresEngineVersion.VER_16_6,
+      version: AuroraPostgresEngineVersion.VER_16_6, // update here when upgrading
     }),
     serverlessV2MinCapacity: 0,   // scale-to-zero
     serverlessV2MaxCapacity: 4,
