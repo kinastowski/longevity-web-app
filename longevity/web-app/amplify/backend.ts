@@ -65,6 +65,31 @@ backend.auroraWarmup.resources.lambda.addToRolePolicy(
 
 cluster.secret.grantRead(backend.auroraWarmup.resources.lambda);
 
+// Bedrock Knowledge Base — HTTP data source for AppSync searchKnowledgeBase query.
+// The KB ID is injected at runtime via the pipeline resolver stash (kbIdResolver.js).
+// Region eu-west-1: where Bedrock and the KB are deployed.
+const kbDataSource = backend.data.addHttpDataSource(
+  "BedrockKnowledgeBaseDataSource",
+  "https://bedrock-agent-runtime.eu-west-1.amazonaws.com",
+  {
+    authorizationConfig: {
+      signingRegion: "eu-west-1",
+      signingServiceName: "bedrock",
+    },
+  }
+);
+
+kbDataSource.grantPrincipal.addToPrincipalPolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["bedrock:Retrieve"],
+    resources: [
+      // TODO: replace * with actual KB ARN after creating the Knowledge Base
+      "arn:aws:bedrock:eu-west-1:*:knowledge-base/*",
+    ],
+  })
+);
+
 // ConversationHandlerFunction (from @aws-amplify/ai-constructs) does NOT call
 // setResourceName(), so the Lambda and its role are invisible to
 // backend.data.resources.roles / .functions / .cfnResources.cfnRoles.
