@@ -8,6 +8,7 @@ import type { Schema } from "@/amplify/data/resource";
 import type { ComponentType } from "react";
 import type { Expert } from "@/lib/experts";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const client = generateClient<Schema>({ authMode: "userPool" });
 const { useAIConversation } = createAIHooks(client);
@@ -104,7 +105,12 @@ export function ExpertChatClient({ expert }: { expert: Expert }) {
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       {/* Header */}
-      <header className="sticky top-0 z-10 flex items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-zinc-800">
+      <header
+        className={cn(
+          "sticky top-0 z-10 flex items-center gap-4 px-6 py-4 bg-zinc-900 border-b border-zinc-800 border-l-4",
+          expert.accent.headerBorderLeft
+        )}
+      >
         <Button
           variant="ghost"
           size="sm"
