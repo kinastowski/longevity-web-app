@@ -68,6 +68,8 @@ backend.auroraWarmup.resources.lambda.addToRolePolicy(
 
 cluster.secret.grantRead(backend.auroraWarmup.resources.lambda);
 
+const KB_ID = "NMQX9C6VSI";
+
 // Bedrock Knowledge Base — HTTP data source for AppSync searchKnowledgeBase query.
 // The KB ID is injected at runtime via the pipeline resolver stash (kbIdResolver.js).
 // Region eu-west-1: where Bedrock and the KB are deployed.
@@ -87,19 +89,18 @@ kbDataSource.grantPrincipal.addToPrincipalPolicy(
     effect: Effect.ALLOW,
     actions: ["bedrock:Retrieve"],
     resources: [
-      "arn:aws:bedrock:eu-west-1:*:knowledge-base/NMQX9C6VSI",
+      `arn:aws:bedrock:eu-west-1:*:knowledge-base/${KB_ID}`,
     ],
   })
 );
 
 // Memory layer: Bedrock KB retrieve + Lambda invoke extractor policies
-const KB_ID = "NMQX9C6VSI";
 const extractorArn = backend.profileExtractorFn.resources.lambda.functionArn;
 
 const bedrockRetrievePolicy = new PolicyStatement({
   effect: Effect.ALLOW,
   actions: ["bedrock:Retrieve"],
-  resources: ["arn:aws:bedrock:eu-west-1:*:knowledge-base/NMQX9C6VSI"],
+  resources: [`arn:aws:bedrock:eu-west-1:*:knowledge-base/${KB_ID}`],
 });
 
 const lambdaInvokeExtractorPolicy = new PolicyStatement({
