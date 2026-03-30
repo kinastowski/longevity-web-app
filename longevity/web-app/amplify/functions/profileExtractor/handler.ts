@@ -1,3 +1,31 @@
+// ─── AWS clients ──────────────────────────────────────────────
+import { Amplify } from 'aws-amplify';
+import { generateClient } from 'aws-amplify/api';
+import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+} from '@aws-sdk/client-bedrock-runtime';
+import type { Schema } from '../../data/resource.js';
+
+Amplify.configure({
+  API: {
+    GraphQL: {
+      endpoint: process.env.AMPLIFY_DATA_GRAPHQL_ENDPOINT!,
+      region: process.env.AWS_REGION ?? 'eu-west-1',
+      defaultAuthMode: 'iam',
+    },
+  },
+});
+const dataClient = generateClient<Schema>({ authMode: 'iam' });
+
+const bedrockClient = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION ?? 'eu-west-1',
+});
+
+const MODEL_ID = 'eu.anthropic.claude-3-5-sonnet-20240620-v1:0';
+
+// ─── Pure functions ───────────────────────────────────────────
+
 export const EXTRACTABLE_KEYS = new Set([
   'age', 'weight', 'diet_style', 'supplements_current',
   'sleep_hours', 'stress_level', 'biggest_lever', 'stress_sources',
@@ -45,3 +73,123 @@ Do not include explanation or markdown. JSON only.
 Conversation:
 ${convo}`;
 }
+
+// ─── Payload type ─────────────────────────────────────────────
+export interface ExtractorPayload {
+  userId: string;
+  expertId: string;
+  conversationId: string;
+  graphqlApiEndpoint: string;
+  authToken: string;
+  listQueryName: string;
+}
+
+// ─── Message fetcher (uses user JWT → owner auth) ────────────
+// NOTE: The exact GraphQL query shape must be verified against the
+// generated AppSync schema after the first sandbox run. List all
+// messages for the conversation, then filter for user messages only.
+async function fetchMessages(
+  endpoint: string,
+  authToken: string,
+  listQueryName: string,
+  conversationId: string
+): Promise<ConversationMessage[]> {
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authToken,
+      },
+      body: JSON.stringify({
+        query: `query {
+          ${listQueryName}(input: { conversationId: "${conversationId}", limit: 20 }) {
+            items {
+              role
+              content { text }
+            }
+          }
+        }`,
+      }),
+    });
+    const json = (await resp.json()) as Record<string, unknown>;
+    const data = (json?.data as Record<string, unknown>)?.[listQueryName] as
+      | { items: Array<{ role: string; content: Array<{ text?: string }> }> }
+      | undefined;
+    return (data?.items ?? []).map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: (m.content ?? []).map((c) => c.text ?? '').join(' '),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ─── Main handler ─────────────────────────────────────────────
+export const handler = async (event: ExtractorPayload): Promise<void> => {
+  const { userId, expertId, conversationId, graphqlApiEndpoint, authToken, listQueryName } =
+    event;
+
+  // 1. Fetch conversation messages using user's JWT
+  const messages = await fetchMessages(
+    graphqlApiEndpoint,
+    authToken,
+    listQueryName,
+    conversationId
+  );
+  if (messages.length === 0) return;
+
+  // 2. Call Bedrock for extraction
+  const prompt = buildExtractionPrompt(messages);
+  const bedrockResp = await bedrockClient.send(
+    new ConverseCommand({
+      modelId: MODEL_ID,
+      messages: [{ role: 'user', content: [{ text: prompt }] }],
+      inferenceConfig: { maxTokens: 512, temperature: 0 },
+    })
+  );
+  const rawText =
+    bedrockResp.output?.message?.content?.find((b) => b.text)?.text ?? '{}';
+
+  // 3. Parse extracted facts — bail early if nothing was extracted
+  const extracted = parseExtractionResponse(rawText);
+  if (Object.keys(extracted).length === 0) return;
+
+  // 4. Fetch existing UserProfile (or null for first conversation)
+  const profileResp = await dataClient.models.UserProfile.listUserProfileByUserId(
+    { userId },
+    { limit: 1 }
+  );
+  const existing = profileResp.data?.[0] ?? null;
+
+  // 5. Snapshot previous version before merge
+  const snapshot = existing ? JSON.stringify(existing) : null;
+
+  // 6. Merge extracted fields into profile
+  const merged = mergeProfile(
+    (existing ?? {}) as Record<string, unknown>,
+    extracted
+  );
+
+  // 7. Write UserProfile (create or update)
+  if (existing) {
+    await dataClient.models.UserProfile.update({
+      id: existing.id,
+      ...(merged as Partial<Schema['UserProfile']['type']>),
+      profile_snapshot: snapshot,
+    });
+  } else {
+    await dataClient.models.UserProfile.create({
+      userId,
+      ...(merged as Partial<Schema['UserProfile']['type']>),
+    });
+  }
+
+  // 8. Write ConversationMemory audit record
+  await dataClient.models.ConversationMemory.create({
+    userId,
+    expertId,
+    conversationId,
+    extractedFacts: JSON.stringify(extracted),
+  });
+};
