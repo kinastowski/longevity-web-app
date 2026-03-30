@@ -1,4 +1,4 @@
-const EXTRACTABLE_KEYS = new Set([
+export const EXTRACTABLE_KEYS = new Set([
   'age', 'weight', 'diet_style', 'supplements_current',
   'sleep_hours', 'stress_level', 'biggest_lever', 'stress_sources',
   'motivation_type', 'chronotype', 'sleep_quality', 'evening_routine',
