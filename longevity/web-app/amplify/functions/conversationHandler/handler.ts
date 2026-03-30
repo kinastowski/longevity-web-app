@@ -1,6 +1,39 @@
 // amplify/functions/conversationHandler/handler.ts
 import type { ConversationTurnEvent } from '@aws-amplify/ai-constructs/conversation/runtime';
 import type { Schema } from '../../data/resource.js';
+import { Amplify } from 'aws-amplify';
+import { generateClient } from 'aws-amplify/api';
+import {
+  BedrockAgentRuntimeClient,
+  RetrieveCommand,
+} from '@aws-sdk/client-bedrock-agent-runtime';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import {
+  handleConversationTurnEvent,
+  createExecutableTool,
+} from '@aws-amplify/ai-constructs/conversation/runtime';
+
+// ─── Amplify Data client (IAM) ────────────────────────────────
+Amplify.configure({
+  API: {
+    GraphQL: {
+      endpoint: process.env.AMPLIFY_DATA_GRAPHQL_ENDPOINT!,
+      region: process.env.AWS_REGION ?? 'eu-west-1',
+      defaultAuthMode: 'iam',
+    },
+  },
+});
+const dataClient = generateClient<Schema>({ authMode: 'iam' });
+
+const kbClient = new BedrockAgentRuntimeClient({
+  region: process.env.AWS_REGION ?? 'eu-west-1',
+});
+const lambdaClient = new LambdaClient({
+  region: process.env.AWS_REGION ?? 'eu-west-1',
+});
+
+const EXPERT_ID = process.env.EXPERT_ID!;
+const KB_ID = process.env.BEDROCK_KB_ID!;
 
 // ─── Profile fields included in the summary block ─────────────
 const PROFILE_FIELDS: Array<keyof Schema['UserProfile']['type']> = [
@@ -246,3 +279,93 @@ export function buildProfileSummaryBlock(
 
   return `\n\nUser profile summary (use this to personalize your response — reference it naturally when relevant, do not list it back verbatim):\n${JSON.stringify(nonEmpty, null, 2)}`;
 }
+
+// ─── KB search tool (Bedrock direct, no AppSync round-trip) ──
+const kbSearchTool = createExecutableTool(
+  'searchKnowledgeBase',
+  "Search the GO Life longevity knowledge base for research, protocols, and expert information relevant to the user's question.",
+  {
+    json: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string' as const, description: 'Search query' },
+      },
+      required: ['query'],
+    },
+  },
+  async ({ query }: { query: string }) => {
+    const resp = await kbClient.send(
+      new RetrieveCommand({
+        knowledgeBaseId: KB_ID,
+        retrievalQuery: { text: query },
+        retrievalConfiguration: {
+          vectorSearchConfiguration: { numberOfResults: 5 },
+        },
+      })
+    );
+    const text =
+      (resp.retrievalResults ?? [])
+        .map(
+          (r, i) =>
+            `[Source ${i + 1}]\nTitle: ${r.metadata?.['title'] ?? 'Unknown'}\n---\n${r.content?.text ?? ''}`
+        )
+        .join('\n\n') || 'No relevant information found in the knowledge base.';
+    return { text };
+  }
+);
+
+// ─── Profile fetcher ─────────────────────────────────────────
+async function getProfile(
+  userId: string
+): Promise<Schema['UserProfile']['type'] | null> {
+  const resp = await dataClient.models.UserProfile.listUserProfileByUserId(
+    { userId },
+    { limit: 1 }
+  );
+  return resp.data?.[0] ?? null;
+}
+
+// ─── Main handler ─────────────────────────────────────────────
+export const handler = async (event: ConversationTurnEvent): Promise<void> => {
+  // 1. Extract userId from JWT
+  const userId = extractUserId(event);
+
+  // 2. Fetch UserProfile
+  const profile = await getProfile(userId);
+
+  // 3. Inject profile summary into system prompt
+  const profileBlock = buildProfileSummaryBlock(
+    profile as unknown as Record<string, unknown>
+  );
+
+  const enhancedEvent: ConversationTurnEvent = {
+    ...event,
+    modelConfiguration: {
+      ...event.modelConfiguration,
+      systemPrompt: event.modelConfiguration.systemPrompt + profileBlock,
+    },
+  };
+
+  // 4. Handle conversation turn — Amplify manages Bedrock call, tool loop, response mutation
+  await handleConversationTurnEvent(enhancedEvent, { tools: [kbSearchTool] });
+
+  // 5. Fire-and-forget profile extraction (async, no await on response)
+  void lambdaClient.send(
+    new InvokeCommand({
+      FunctionName: process.env.PROFILE_EXTRACTOR_ARN!,
+      InvocationType: 'Event',
+      Payload: Buffer.from(
+        JSON.stringify({
+          userId,
+          expertId: EXPERT_ID,
+          conversationId: event.conversationId,
+          graphqlApiEndpoint: event.graphqlApiEndpoint,
+          authToken:
+            event.request.headers['authorization'] ||
+            event.request.headers['Authorization'],
+          listQueryName: event.messageHistoryQuery.listQueryName,
+        })
+      ),
+    })
+  );
+};
