@@ -25,7 +25,9 @@ const schema = a.schema({
   // ─────────────────────────────────────────────
   // USER PROFILE — DynamoDB via Amplify Data
   // Flat fields. Extraction returns individual keys; flat makes merge trivial.
-  // Lambda allow.resource() entries added in later wiring task.
+  // Lambda allow.resource() entries added in Task 9 (wiring task).
+  // IMPORTANT: add them to the SAME .authorization() array as allow.owner() —
+  // do not replace it, or users will be locked out of their own profiles.
   // ─────────────────────────────────────────────
   UserProfile: a
     .model({
@@ -64,7 +66,7 @@ const schema = a.schema({
     .model({
       userId: a.string().required(),
       expertId: a.string().required(),
-      extractedFacts: a.string(),
+      extractedFacts: a.string(), // JSON string: { age?: number, diet_style?: string, ... } — same keys as UserProfile extractable fields
       conversationId: a.string(),
     })
     .secondaryIndexes((idx) => [idx("userId")])
