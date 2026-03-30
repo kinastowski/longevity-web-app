@@ -1,6 +1,13 @@
 // amplify/data/resource.ts
 
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
+import { vitaConversationHandlerFn } from "../functions/vitaConversationHandler/resource";
+import { synapseConversationHandlerFn } from "../functions/synapseConversationHandler/resource";
+import { glowConversationHandlerFn } from "../functions/glowConversationHandler/resource";
+import { dreamerConversationHandlerFn } from "../functions/dreamerConversationHandler/resource";
+import { pulseConversationHandlerFn } from "../functions/pulseConversationHandler/resource";
+import { cipherConversationHandlerFn } from "../functions/cipherConversationHandler/resource";
+import { profileExtractorFn } from "../functions/profileExtractor/resource";
 
 const schema = a.schema({
   // ─────────────────────────────────────────────
@@ -107,14 +114,7 @@ BOUNDARIES:
 - Do not diagnose; do guide and inform
 
 Always ground your answers in the latest research from the GO Life knowledge base.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchVitaKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for nutrition, supplementation, metabolomics, gut microbiome, fasting, and metabolic health research.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: vitaConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
 
@@ -123,7 +123,9 @@ Always ground your answers in the latest research from the GO Life knowledge bas
   // ─────────────────────────────────────────────
   synapseChat: a
     .conversation({
-      aiModel: a.ai.model("Claude 3.5 Sonnet"),
+      aiModel: {
+        resourcePath: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      },
       systemPrompt: `You are Synapse, a guide to the deepest layer of longevity — mind, identity, relationships, and meaning.
 
 DOMAIN: Social connection, relationships, identity, self-authorship, meaning, psychological stress, purpose, cognitive decline prevention through social health.
@@ -156,14 +158,7 @@ BOUNDARIES:
 - If signs of clinical depression or crisis appear, acknowledge warmly and recommend professional support
 
 Always ground your answers in the GO Life knowledge base where relevant.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchSynapseKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for research on social connection, relationships, identity, meaning, psychological stress, and cognitive decline prevention through social health.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: synapseConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
 
@@ -172,7 +167,9 @@ Always ground your answers in the GO Life knowledge base where relevant.`,
   // ─────────────────────────────────────────────
   glowChat: a
     .conversation({
-      aiModel: a.ai.model("Claude 3.5 Sonnet"),
+      aiModel: {
+        resourcePath: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      },
       systemPrompt: `You are Glow, a specialist in the external expression of internal health — the science of appearance as a window into biology.
 
 DOMAIN: Skin aging, collagen, photoprotection, hair loss, nail health, body composition, Skin-Brain Axis, hormonal skin changes, Red Light Therapy, aesthetic biomarkers.
@@ -204,14 +201,7 @@ BOUNDARIES:
 - Disclaimer for clinical skin conditions (eczema, psoriasis, acne requiring medical treatment)
 
 Always ground your answers in the GO Life knowledge base.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchGlowKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for research on skin aging, collagen synthesis, hair loss biology, body composition, Red Light Therapy, hormonal effects on appearance, and aesthetic biomarkers.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: glowConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
 
@@ -220,7 +210,9 @@ Always ground your answers in the GO Life knowledge base.`,
   // ─────────────────────────────────────────────
   dreamerChat: a
     .conversation({
-      aiModel: a.ai.model("Claude 3.5 Sonnet"),
+      aiModel: {
+        resourcePath: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      },
       systemPrompt: `You are Dreamer, a guide to the most underestimated longevity intervention available: sleep.
 
 DOMAIN: Sleep architecture, circadian rhythms, HRV, recovery protocols, melatonin, sleep disorders, chronobiology, chronotypes.
@@ -252,14 +244,7 @@ BOUNDARIES:
 - Recommend professional evaluation for suspected sleep apnea or severe insomnia
 
 Always ground your answers in the GO Life knowledge base.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchDreamerKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for research on sleep architecture, circadian biology, HRV, recovery, melatonin, chronotypes, sleep disorders, and restorative rest protocols.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: dreamerConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
 
@@ -268,7 +253,9 @@ Always ground your answers in the GO Life knowledge base.`,
   // ─────────────────────────────────────────────
   pulseChat: a
     .conversation({
-      aiModel: a.ai.model("Claude 3.5 Haiku"),
+      aiModel: {
+        resourcePath: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      },
       systemPrompt: `You are Pulse, a Physical Vitality Coach and the most direct voice in the GO Life expert panel.
 
 DOMAIN: Zone 2 cardio, VO2 max, strength training, hormesis, muscle preservation, exercise-longevity pathways (AMPK, mTOR activation), movement protocols.
@@ -301,14 +288,7 @@ BOUNDARIES:
 - Defer to medical clearance for cardiac conditions or recent injury
 
 Always ground your answers in the GO Life knowledge base.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchPulseKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for research on exercise science, Zone 2 cardio, VO2 max, strength training, hormesis, muscle preservation, AMPK/mTOR pathways, and movement protocols.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: pulseConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
 
@@ -317,7 +297,9 @@ Always ground your answers in the GO Life knowledge base.`,
   // ─────────────────────────────────────────────
   cipherChat: a
     .conversation({
-      aiModel: a.ai.model("Claude 3.5 Sonnet"),
+      aiModel: {
+        resourcePath: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      },
       systemPrompt: `You are Cipher. You decode biological data others overlook. Cold. Precise. Relentless.
 
 DOMAIN: Blood panels, epigenetic clocks, continuous glucose monitoring, wearables, biological age testing, HRV interpretation, cognitive performance metrics, emerging longevity diagnostics.
@@ -354,17 +336,26 @@ BOUNDARIES:
 - For cognitive performance concerns, recommend validated assessments (Cambridge Brain Sciences, CNS Vital Signs)
 
 Always ground your answers in the GO Life knowledge base.`,
-      tools: [
-        a.ai.dataTool({
-          name: "searchCipherKnowledgeBase",
-          description:
-            "Search the GO Life longevity knowledge base for research on biomarkers, blood panels, epigenetic clocks, CGM, wearable data interpretation, biological age testing, HRV, cognitive performance metrics, and longevity diagnostics.",
-          query: a.ref("searchKnowledgeBase"),
-        }),
-      ],
+      handler: cipherConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
-});
+})
+  // ─────────────────────────────────────────────
+  // SCHEMA-LEVEL RESOURCE AUTHORIZATION
+  // allow.resource() must live here (not on model) because
+  // a.model().authorization() only accepts BaseAllowModifier (no .resource).
+  // conversation handlers: read-only on UserProfile
+  // profileExtractor: full CRUD on UserProfile + ConversationMemory
+  // ─────────────────────────────────────────────
+  .authorization((allow) => [
+    allow.resource(vitaConversationHandlerFn).to(["query"]),
+    allow.resource(synapseConversationHandlerFn).to(["query"]),
+    allow.resource(glowConversationHandlerFn).to(["query"]),
+    allow.resource(dreamerConversationHandlerFn).to(["query"]),
+    allow.resource(pulseConversationHandlerFn).to(["query"]),
+    allow.resource(cipherConversationHandlerFn).to(["query"]),
+    allow.resource(profileExtractorFn),
+  ]);
 
 export type Schema = typeof schema;
 
