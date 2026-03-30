@@ -7,7 +7,6 @@ import { glowConversationHandlerFn } from "../functions/glowConversationHandler/
 import { dreamerConversationHandlerFn } from "../functions/dreamerConversationHandler/resource";
 import { pulseConversationHandlerFn } from "../functions/pulseConversationHandler/resource";
 import { cipherConversationHandlerFn } from "../functions/cipherConversationHandler/resource";
-import { profileExtractorFn } from "../functions/profileExtractor/resource";
 
 const schema = a.schema({
   // ─────────────────────────────────────────────
@@ -64,6 +63,7 @@ const schema = a.schema({
       profile_snapshot: a.string(),
     })
     .secondaryIndexes((idx) => [idx("userId")])
+    // Lambda access granted via backend.data.resources.tables in backend.ts (allow.resource not supported at model level)
     .authorization((allow) => [allow.owner()]),
 
   // ─────────────────────────────────────────────
@@ -77,6 +77,7 @@ const schema = a.schema({
       conversationId: a.string(),
     })
     .secondaryIndexes((idx) => [idx("userId")])
+    // Lambda access granted via backend.data.resources.tables in backend.ts
     .authorization((allow) => [allow.owner()]),
 
   // ─────────────────────────────────────────────
@@ -339,25 +340,9 @@ Always ground your answers in the GO Life knowledge base.`,
       handler: cipherConversationHandlerFn,
     })
     .authorization((allow) => allow.owner()),
-})
-  // ─────────────────────────────────────────────
-  // SCHEMA-LEVEL RESOURCE AUTHORIZATION
-  // allow.resource() must live here (not on model) because
-  // a.model().authorization() only accepts BaseAllowModifier (no .resource).
-  // conversation handlers: read-only on UserProfile
-  // profileExtractor: full access to all schema resources (model-level scoping not supported in this Amplify version)
-  // ─────────────────────────────────────────────
-  .authorization((allow) => [
-    allow.resource(vitaConversationHandlerFn).to(["query"]),
-    allow.resource(synapseConversationHandlerFn).to(["query"]),
-    allow.resource(glowConversationHandlerFn).to(["query"]),
-    allow.resource(dreamerConversationHandlerFn).to(["query"]),
-    allow.resource(pulseConversationHandlerFn).to(["query"]),
-    allow.resource(cipherConversationHandlerFn).to(["query"]),
-    allow.resource(profileExtractorFn),
-  ]);
+});
 
-export type Schema = typeof schema;
+export type Schema = ClientSchema<typeof schema>;
 
 export const data = defineData({
   schema,

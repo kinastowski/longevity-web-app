@@ -122,6 +122,11 @@ const EXPERT_ID_BY_PATH: Record<string, string> = {
   cipherconversationhandler: "cipher",
 };
 
+// DynamoDB table access — allow.resource() is not supported at model level in this Amplify version;
+// grant table access explicitly via CDK instead.
+const userProfileTable = backend.data.resources.tables["UserProfile"];
+const conversationMemoryTable = backend.data.resources.tables["ConversationMemory"];
+
 Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) => {
   if (!(construct instanceof LambdaFunction)) return;
   const pathLower = construct.node.path.toLowerCase();
@@ -135,9 +140,14 @@ Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) =
   construct.addEnvironment("EXPERT_ID", expertId);
   construct.addEnvironment("PROFILE_EXTRACTOR_ARN", extractorArn);
   construct.addEnvironment("BEDROCK_KB_ID", KB_ID);
+  // Read-only access to UserProfile for profile injection
+  userProfileTable.grantReadData(construct);
 });
 
-// profileExtractor — Bedrock InvokeModel for extraction call
+// profileExtractor — Bedrock InvokeModel + full DynamoDB access to UserProfile and ConversationMemory
+userProfileTable.grantReadWriteData(backend.profileExtractorFn.resources.lambda);
+conversationMemoryTable.grantWriteData(backend.profileExtractorFn.resources.lambda);
+
 backend.profileExtractorFn.resources.lambda.addToRolePolicy(
   new PolicyStatement({
     effect: Effect.ALLOW,
