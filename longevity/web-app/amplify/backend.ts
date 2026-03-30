@@ -2,6 +2,8 @@ import { defineBackend } from "@aws-amplify/backend";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { auroraWarmup } from "./functions/auroraWarmup/resource";
+import { profileExtractorFn } from "./functions/profileExtractor/resource";
+import { Stack } from "aws-cdk-lib";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Rule, Schedule } from "aws-cdk-lib/aws-events";
@@ -12,6 +14,7 @@ const backend = defineBackend({
   auth,
   data,
   auroraWarmup,
+  profileExtractorFn,
 });
 
 // Aurora Serverless v2 — provisioned via CDK, no manual console steps
@@ -84,22 +87,63 @@ kbDataSource.grantPrincipal.addToPrincipalPolicy(
     effect: Effect.ALLOW,
     actions: ["bedrock:Retrieve"],
     resources: [
-      // TODO: replace * with actual KB ARN after creating the Knowledge Base
-      "arn:aws:bedrock:eu-west-1:*:knowledge-base/*",
+      "arn:aws:bedrock:eu-west-1:*:knowledge-base/NMQX9C6VSI",
     ],
   })
 );
 
-// ConversationHandlerFunction (from @aws-amplify/ai-constructs) does NOT call
-// setResourceName(), so the Lambda and its role are invisible to
-// backend.data.resources.roles / .functions / .cfnResources.cfnRoles.
-// The only reliable path is to walk the full construct tree and match on path.
-backend.data.resources.graphqlApi.node.findAll().forEach((construct) => {
-  if (
-    construct instanceof LambdaFunction &&
-    construct.node.path.toLowerCase().includes("conversation")
-  ) {
-    construct.addToRolePolicy(bedrockPolicy);
-    construct.addToRolePolicy(marketplacePolicy);
-  }
+// Memory layer: Bedrock KB retrieve + Lambda invoke extractor policies
+const KB_ID = "NMQX9C6VSI";
+const extractorArn = backend.profileExtractorFn.resources.lambda.functionArn;
+
+const bedrockRetrievePolicy = new PolicyStatement({
+  effect: Effect.ALLOW,
+  actions: ["bedrock:Retrieve"],
+  resources: ["arn:aws:bedrock:eu-west-1:*:knowledge-base/NMQX9C6VSI"],
 });
+
+const lambdaInvokeExtractorPolicy = new PolicyStatement({
+  effect: Effect.ALLOW,
+  actions: ["lambda:InvokeFunction"],
+  resources: [extractorArn],
+});
+
+// Per-expert EXPERT_ID map — handler Lambda construct paths contain the function name.
+// ConversationHandlerFunction (from @aws-amplify/ai-constructs) does NOT call
+// setResourceName(), so Lambdas are not accessible via backend.xyz.resources.lambda.
+// Must walk the data stack and match by construct path.
+const EXPERT_ID_BY_PATH: Record<string, string> = {
+  vitaconversationhandler: "vita",
+  synapseconversationhandler: "synapse",
+  glowconversationhandler: "glow",
+  dreamerconversationhandler: "dreamer",
+  pulseconversationhandler: "pulse",
+  cipherconversationhandler: "cipher",
+};
+
+Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) => {
+  if (!(construct instanceof LambdaFunction)) return;
+  const pathLower = construct.node.path.toLowerCase();
+  const expertId = Object.entries(EXPERT_ID_BY_PATH).find(([key]) => pathLower.includes(key))?.[1];
+  if (!expertId) return;
+
+  construct.addToRolePolicy(bedrockPolicy);
+  construct.addToRolePolicy(marketplacePolicy);
+  construct.addToRolePolicy(bedrockRetrievePolicy);
+  construct.addToRolePolicy(lambdaInvokeExtractorPolicy);
+  construct.addEnvironment("EXPERT_ID", expertId);
+  construct.addEnvironment("PROFILE_EXTRACTOR_ARN", extractorArn);
+  construct.addEnvironment("BEDROCK_KB_ID", KB_ID);
+});
+
+// profileExtractor — Bedrock InvokeModel for extraction call
+backend.profileExtractorFn.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["bedrock:InvokeModel"],
+    resources: [
+      "arn:aws:bedrock:eu-west-1:*:inference-profile/eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    ],
+  })
+);
