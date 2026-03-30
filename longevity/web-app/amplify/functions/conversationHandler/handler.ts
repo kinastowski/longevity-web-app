@@ -1,8 +1,5 @@
 // amplify/functions/conversationHandler/handler.ts
 import type { ConversationTurnEvent } from '@aws-amplify/ai-constructs/conversation/runtime';
-import type { Schema } from '../../data/resource.js';
-import { Amplify } from 'aws-amplify';
-import { generateClient } from 'aws-amplify/api';
 import {
   BedrockAgentRuntimeClient,
   RetrieveCommand,
@@ -12,18 +9,14 @@ import {
   handleConversationTurnEvent,
   createExecutableTool,
 } from '@aws-amplify/ai-constructs/conversation/runtime';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
-// ─── Amplify Data client (IAM) ────────────────────────────────
-Amplify.configure({
-  API: {
-    GraphQL: {
-      endpoint: process.env.AMPLIFY_DATA_GRAPHQL_ENDPOINT!,
-      region: process.env.AWS_REGION ?? 'eu-west-1',
-      defaultAuthMode: 'iam',
-    },
-  },
-});
-const dataClient = generateClient<Schema>({ authMode: 'iam' });
+// ─── DynamoDB client (direct SDK — generateClient requires full Amplify outputs) ──
+const ddb = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: process.env.AWS_REGION ?? 'eu-west-1' })
+);
+const USERPROFILE_TABLE = process.env.USERPROFILE_TABLE_NAME!;
 
 const kbClient = new BedrockAgentRuntimeClient({
   region: process.env.AWS_REGION ?? 'eu-west-1',
@@ -36,7 +29,7 @@ const EXPERT_ID = process.env.EXPERT_ID!;
 const KB_ID = process.env.BEDROCK_KB_ID!;
 
 // ─── Profile fields included in the summary block ─────────────
-const PROFILE_FIELDS: Array<keyof Schema['UserProfile']['type']> = [
+const PROFILE_FIELDS: readonly string[] = [
   'age', 'weight', 'diet_style', 'supplements_current', 'sleep_hours',
   'stress_level', 'biggest_lever', 'stress_sources', 'motivation_type',
   'chronotype', 'sleep_quality', 'evening_routine',
@@ -314,15 +307,37 @@ const kbSearchTool = createExecutableTool(
   }
 );
 
+// ─── UserProfile shape (mirrors DynamoDB item fields) ────────
+interface UserProfile {
+  id: string;
+  userId: string;
+  age?: number | null;
+  weight?: string | null;
+  diet_style?: string | null;
+  supplements_current?: string[] | null;
+  sleep_hours?: number | null;
+  stress_level?: string | null;
+  biggest_lever?: string | null;
+  stress_sources?: string[] | null;
+  motivation_type?: string | null;
+  chronotype?: string | null;
+  sleep_quality?: string | null;
+  evening_routine?: string | null;
+  profile_snapshot?: string | null;
+}
+
 // ─── Profile fetcher ─────────────────────────────────────────
-async function getProfile(
-  userId: string
-): Promise<Schema['UserProfile']['type'] | null> {
-  const resp = await dataClient.models.UserProfile.listUserProfileByUserId(
-    { userId },
-    { limit: 1 }
+async function getProfile(userId: string): Promise<UserProfile | null> {
+  const resp = await ddb.send(
+    new QueryCommand({
+      TableName: USERPROFILE_TABLE,
+      IndexName: 'userProfilesByUserId',
+      KeyConditionExpression: 'userId = :uid',
+      ExpressionAttributeValues: { ':uid': userId },
+      Limit: 1,
+    })
   );
-  return resp.data?.[0] ?? null;
+  return (resp.Items?.[0] as UserProfile | undefined) ?? null;
 }
 
 // ─── Main handler ─────────────────────────────────────────────

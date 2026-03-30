@@ -1,22 +1,17 @@
 // ─── AWS clients ──────────────────────────────────────────────
-import { Amplify } from 'aws-amplify';
-import { generateClient } from 'aws-amplify/api';
 import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from '@aws-sdk/client-bedrock-runtime';
-import type { Schema } from '../../data/resource.js';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
-Amplify.configure({
-  API: {
-    GraphQL: {
-      endpoint: process.env.AMPLIFY_DATA_GRAPHQL_ENDPOINT!,
-      region: process.env.AWS_REGION ?? 'eu-west-1',
-      defaultAuthMode: 'iam',
-    },
-  },
-});
-const dataClient = generateClient<Schema>({ authMode: 'iam' });
+// Direct DynamoDB SDK — generateClient requires full Amplify outputs, not available in Lambdas without allow.resource()
+const ddb = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: process.env.AWS_REGION ?? 'eu-west-1' })
+);
+const USERPROFILE_TABLE = process.env.USERPROFILE_TABLE_NAME!;
+const CONVERSATIONMEMORY_TABLE = process.env.CONVERSATIONMEMORY_TABLE_NAME!;
 
 const bedrockClient = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'eu-west-1',
@@ -72,6 +67,28 @@ Do not include explanation or markdown. JSON only.
 
 Conversation:
 ${convo}`;
+}
+
+// ─── UserProfile shape (mirrors DynamoDB item fields) ────────
+interface UserProfile {
+  id: string;
+  userId: string;
+  owner?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  age?: number | null;
+  weight?: string | null;
+  diet_style?: string | null;
+  supplements_current?: string[] | null;
+  sleep_hours?: number | null;
+  stress_level?: string | null;
+  biggest_lever?: string | null;
+  stress_sources?: string[] | null;
+  motivation_type?: string | null;
+  chronotype?: string | null;
+  sleep_quality?: string | null;
+  evening_routine?: string | null;
+  profile_snapshot?: string | null;
 }
 
 // ─── Payload type ─────────────────────────────────────────────
@@ -156,11 +173,16 @@ export const handler = async (event: ExtractorPayload): Promise<void> => {
   if (Object.keys(extracted).length === 0) return;
 
   // 4. Fetch existing UserProfile (or null for first conversation)
-  const profileResp = await dataClient.models.UserProfile.listUserProfileByUserId(
-    { userId },
-    { limit: 1 }
+  const profileResp = await ddb.send(
+    new QueryCommand({
+      TableName: USERPROFILE_TABLE,
+      IndexName: 'userProfilesByUserId',
+      KeyConditionExpression: 'userId = :uid',
+      ExpressionAttributeValues: { ':uid': userId },
+      Limit: 1,
+    })
   );
-  const existing = profileResp.data?.[0] ?? null;
+  const existing = (profileResp.Items?.[0] as UserProfile | undefined) ?? null;
 
   // 5. Snapshot previous version before merge
   const snapshot = existing ? JSON.stringify(existing) : null;
@@ -171,25 +193,39 @@ export const handler = async (event: ExtractorPayload): Promise<void> => {
     extracted
   );
 
-  // 7. Write UserProfile (create or update)
-  if (existing) {
-    await dataClient.models.UserProfile.update({
-      id: existing.id,
-      ...(merged as Partial<Schema['UserProfile']['type']>),
-      profile_snapshot: snapshot,
-    });
-  } else {
-    await dataClient.models.UserProfile.create({
-      userId,
-      ...(merged as Partial<Schema['UserProfile']['type']>),
-    });
-  }
+  const now = new Date().toISOString();
+
+  // 7. Write UserProfile (upsert via PutCommand)
+  await ddb.send(
+    new PutCommand({
+      TableName: USERPROFILE_TABLE,
+      Item: {
+        id: existing?.id ?? crypto.randomUUID(),
+        userId,
+        // owner = sub so Cognito owner-auth (identityClaim('sub')) allows user reads
+        owner: existing?.owner ?? userId,
+        ...merged,
+        profile_snapshot: snapshot,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    })
+  );
 
   // 8. Write ConversationMemory audit record
-  await dataClient.models.ConversationMemory.create({
-    userId,
-    expertId,
-    conversationId,
-    extractedFacts: JSON.stringify(extracted),
-  });
+  await ddb.send(
+    new PutCommand({
+      TableName: CONVERSATIONMEMORY_TABLE,
+      Item: {
+        id: crypto.randomUUID(),
+        userId,
+        owner: userId,
+        expertId,
+        conversationId,
+        extractedFacts: JSON.stringify(extracted),
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+  );
 };

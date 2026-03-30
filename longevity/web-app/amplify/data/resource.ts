@@ -64,7 +64,8 @@ const schema = a.schema({
     })
     .secondaryIndexes((idx) => [idx("userId")])
     // Lambda access granted via backend.data.resources.tables in backend.ts (allow.resource not supported at model level)
-    .authorization((allow) => [allow.owner()]),
+    // identityClaim('sub') ensures owner = Cognito sub, which matches the userId we extract from the JWT sub.
+    .authorization((allow) => [allow.owner().identityClaim('sub')]),
 
   // ─────────────────────────────────────────────
   // CONVERSATION MEMORY — audit log of extracted facts per turn
@@ -78,7 +79,8 @@ const schema = a.schema({
     })
     .secondaryIndexes((idx) => [idx("userId")])
     // Lambda access granted via backend.data.resources.tables in backend.ts
-    .authorization((allow) => [allow.owner()]),
+    // identityClaim('sub') ensures owner = Cognito sub, matching the userId from JWT sub.
+    .authorization((allow) => [allow.owner().identityClaim('sub')]),
 
   // ─────────────────────────────────────────────
   // 1. 🧬 VITA — Metabolic Optimization Specialist

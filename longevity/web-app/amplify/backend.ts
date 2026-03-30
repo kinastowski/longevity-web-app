@@ -140,6 +140,7 @@ Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) =
   construct.addEnvironment("EXPERT_ID", expertId);
   construct.addEnvironment("PROFILE_EXTRACTOR_ARN", extractorArn);
   construct.addEnvironment("BEDROCK_KB_ID", KB_ID);
+  construct.addEnvironment("USERPROFILE_TABLE_NAME", userProfileTable.tableName);
   // Read-only access to UserProfile for profile injection
   userProfileTable.grantReadData(construct);
 });
@@ -147,6 +148,14 @@ Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) =
 // profileExtractor — Bedrock InvokeModel + full DynamoDB access to UserProfile and ConversationMemory
 userProfileTable.grantReadWriteData(backend.profileExtractorFn.resources.lambda);
 conversationMemoryTable.grantWriteData(backend.profileExtractorFn.resources.lambda);
+
+// Inject table names for direct DynamoDB SDK access (generateClient requires full Amplify outputs, not available in Lambdas)
+(backend.profileExtractorFn.resources.lambda as LambdaFunction).addEnvironment(
+  "USERPROFILE_TABLE_NAME", userProfileTable.tableName
+);
+(backend.profileExtractorFn.resources.lambda as LambdaFunction).addEnvironment(
+  "CONVERSATIONMEMORY_TABLE_NAME", conversationMemoryTable.tableName
+);
 
 backend.profileExtractorFn.resources.lambda.addToRolePolicy(
   new PolicyStatement({
