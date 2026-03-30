@@ -5,6 +5,7 @@ import { defineConversationHandlerFunction } from "@aws-amplify/backend-ai/conve
 export const pulseConversationHandlerFn = defineConversationHandlerFunction({
   name: "pulseConversationHandler",
   entry: "../conversationHandler/handler.ts",
+  // Grants IAM invoke permission for this Bedrock model — must match aiModel.resourcePath in data/resource.ts
   models: [
     {
       modelId: "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",

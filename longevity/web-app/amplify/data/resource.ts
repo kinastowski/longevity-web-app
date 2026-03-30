@@ -345,7 +345,7 @@ Always ground your answers in the GO Life knowledge base.`,
   // allow.resource() must live here (not on model) because
   // a.model().authorization() only accepts BaseAllowModifier (no .resource).
   // conversation handlers: read-only on UserProfile
-  // profileExtractor: full CRUD on UserProfile + ConversationMemory
+  // profileExtractor: full access to all schema resources (model-level scoping not supported in this Amplify version)
   // ─────────────────────────────────────────────
   .authorization((allow) => [
     allow.resource(vitaConversationHandlerFn).to(["query"]),
