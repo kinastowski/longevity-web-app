@@ -12,6 +12,6 @@ export const vitaConversationHandlerFn = defineConversationHandlerFunction({
       region: "eu-central-1",
     },
   ],
-  timeoutSeconds: 30,
+  timeoutSeconds: 60,
   memoryMB: 512,
 });

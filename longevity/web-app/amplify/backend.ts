@@ -5,6 +5,7 @@ import { auroraWarmup } from "./functions/auroraWarmup/resource";
 import { profileExtractorFn } from "./functions/profileExtractor/resource";
 import { Stack } from "aws-cdk-lib";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
 import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Rule, Schedule } from "aws-cdk-lib/aws-events";
 import { LambdaFunction as LambdaTarget } from "aws-cdk-lib/aws-events-targets";
@@ -94,7 +95,7 @@ kbDataSource.grantPrincipal.addToPrincipalPolicy(
   })
 );
 
-// Memory layer: Bedrock KB retrieve + Lambda invoke extractor policies
+// Memory layer: Bedrock KB retrieve policy
 const extractorArn = backend.profileExtractorFn.resources.lambda.functionArn;
 
 const bedrockRetrievePolicy = new PolicyStatement({
@@ -103,16 +104,10 @@ const bedrockRetrievePolicy = new PolicyStatement({
   resources: [`arn:aws:bedrock:eu-west-1:*:knowledge-base/${KB_ID}`],
 });
 
-const lambdaInvokeExtractorPolicy = new PolicyStatement({
-  effect: Effect.ALLOW,
-  actions: ["lambda:InvokeFunction"],
-  resources: [extractorArn],
-});
-
 // Per-expert EXPERT_ID map — handler Lambda construct paths contain the function name.
-// ConversationHandlerFunction (from @aws-amplify/ai-constructs) does NOT call
-// setResourceName(), so Lambdas are not accessible via backend.xyz.resources.lambda.
-// Must walk the data stack and match by construct path.
+// ConversationHandlerFunction Lambdas live in their OWN top-level CDK stack
+// (conversationHandlerFunction...), NOT in the data stack. Must walk the entire
+// CDK app tree (node.root) to find them — walking only Stack.of(graphqlApi) misses them.
 const EXPERT_ID_BY_PATH: Record<string, string> = {
   vitaconversationhandler: "vita",
   synapseconversationhandler: "synapse",
@@ -127,7 +122,51 @@ const EXPERT_ID_BY_PATH: Record<string, string> = {
 const userProfileTable = backend.data.resources.tables["UserProfile"];
 const conversationMemoryTable = backend.data.resources.tables["ConversationMemory"];
 
-Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) => {
+// SSM config stack — writes resolved table names and extractor ARN to Parameter Store.
+// Conversation handler Lambdas live in a SEPARATE CFN stack from the data tables.
+// Injecting CDK tokens directly (addEnvironment / grantReadData) would create circular
+// CloudFormation dependency (data ↔ conversationHandlerFunction).
+// Solution: write values to SSM here (configStack → data, one-way dep), and have the
+// Lambda read them at cold start via SDK call (no CFN cross-stack reference).
+const configStack = backend.createStack("config");
+new StringParameter(configStack, "UserProfileTableNameParam", {
+  parameterName: "/go-life/userprofile-table-name",
+  stringValue: userProfileTable.tableName,
+});
+new StringParameter(configStack, "ProfileExtractorArnParam", {
+  parameterName: "/go-life/profile-extractor-arn",
+  stringValue: extractorArn,
+});
+
+// IAM policies using ARN PATTERNS + ${AWS::AccountId} pseudo-param.
+// Pseudo-params are resolved locally per stack — no cross-stack CFN references created.
+const acct = Stack.of(backend.data.resources.graphqlApi).account;
+
+const conversationHandlerDynamoPolicy = new PolicyStatement({
+  effect: Effect.ALLOW,
+  actions: ["dynamodb:GetItem", "dynamodb:Query"],
+  resources: [
+    `arn:aws:dynamodb:eu-west-1:${acct}:table/UserProfile-*`,
+    `arn:aws:dynamodb:eu-west-1:${acct}:table/UserProfile-*/index/*`,
+  ],
+});
+
+const conversationHandlerLambdaInvokePolicy = new PolicyStatement({
+  effect: Effect.ALLOW,
+  actions: ["lambda:InvokeFunction"],
+  resources: [`arn:aws:lambda:eu-west-1:${acct}:function:*profileExtractor*`],
+});
+
+const ssmReadPolicy = new PolicyStatement({
+  effect: Effect.ALLOW,
+  actions: ["ssm:GetParameters"],
+  resources: [`arn:aws:ssm:eu-west-1:${acct}:parameter/go-life/*`],
+});
+
+// Walk the entire CDK app to find conversation handler Lambdas in their own stack.
+// Only add policies/env vars that carry NO CDK token cross-stack references.
+// Table name and extractor ARN are read from SSM at Lambda cold start (handler.ts).
+Stack.of(backend.data.resources.graphqlApi).node.root.node.findAll().forEach((construct) => {
   if (!(construct instanceof LambdaFunction)) return;
   const pathLower = construct.node.path.toLowerCase();
   const expertId = Object.entries(EXPERT_ID_BY_PATH).find(([key]) => pathLower.includes(key))?.[1];
@@ -136,18 +175,25 @@ Stack.of(backend.data.resources.graphqlApi).node.findAll().forEach((construct) =
   construct.addToRolePolicy(bedrockPolicy);
   construct.addToRolePolicy(marketplacePolicy);
   construct.addToRolePolicy(bedrockRetrievePolicy);
-  construct.addToRolePolicy(lambdaInvokeExtractorPolicy);
+  construct.addToRolePolicy(conversationHandlerDynamoPolicy);
+  construct.addToRolePolicy(conversationHandlerLambdaInvokePolicy);
+  construct.addToRolePolicy(ssmReadPolicy);
   construct.addEnvironment("EXPERT_ID", expertId);
-  construct.addEnvironment("PROFILE_EXTRACTOR_ARN", extractorArn);
   construct.addEnvironment("BEDROCK_KB_ID", KB_ID);
-  construct.addEnvironment("USERPROFILE_TABLE_NAME", userProfileTable.tableName);
-  // Read-only access to UserProfile for profile injection
-  userProfileTable.grantReadData(construct);
 });
 
 // profileExtractor — Bedrock InvokeModel + full DynamoDB access to UserProfile and ConversationMemory
 userProfileTable.grantReadWriteData(backend.profileExtractorFn.resources.lambda);
 conversationMemoryTable.grantWriteData(backend.profileExtractorFn.resources.lambda);
+
+// grantReadWriteData only covers the table ARN, not GSI ARNs — add index access explicitly
+backend.profileExtractorFn.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["dynamodb:Query"],
+    resources: [`${userProfileTable.tableArn}/index/*`],
+  })
+);
 
 // Inject table names for direct DynamoDB SDK access (generateClient requires full Amplify outputs, not available in Lambdas)
 (backend.profileExtractorFn.resources.lambda as LambdaFunction).addEnvironment(

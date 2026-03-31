@@ -5,6 +5,7 @@ import {
   RetrieveCommand,
 } from '@aws-sdk/client-bedrock-agent-runtime';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { SSMClient, GetParametersCommand } from '@aws-sdk/client-ssm';
 import {
   handleConversationTurnEvent,
   createExecutableTool,
@@ -12,21 +13,49 @@ import {
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
-// ─── DynamoDB client (direct SDK — generateClient requires full Amplify outputs) ──
+// ─── AWS clients ──────────────────────────────────────────────────────────────
 const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: process.env.AWS_REGION ?? 'eu-west-1' })
 );
-const USERPROFILE_TABLE = process.env.USERPROFILE_TABLE_NAME!;
-
 const kbClient = new BedrockAgentRuntimeClient({
   region: process.env.AWS_REGION ?? 'eu-west-1',
 });
 const lambdaClient = new LambdaClient({
   region: process.env.AWS_REGION ?? 'eu-west-1',
 });
+const ssmClient = new SSMClient({ region: process.env.AWS_REGION ?? 'eu-west-1' });
 
 const EXPERT_ID = process.env.EXPERT_ID!;
 const KB_ID = process.env.BEDROCK_KB_ID!;
+
+// ─── SSM config (table name + extractor ARN injected via SSM to avoid circular
+//     CFN dep between conversationHandlerFunction stack and data stack) ─────────
+const SSM_USERPROFILE_TABLE = '/go-life/userprofile-table-name';
+const SSM_PROFILE_EXTRACTOR_ARN = '/go-life/profile-extractor-arn';
+
+// Cached per cold start — only one SSM call per container lifetime.
+let cachedUserProfileTable: string | undefined;
+let cachedExtractorArn: string | undefined;
+
+async function getSSMConfig(): Promise<{ tableName: string; extractorArn: string }> {
+  if (cachedUserProfileTable && cachedExtractorArn) {
+    return { tableName: cachedUserProfileTable, extractorArn: cachedExtractorArn };
+  }
+  const resp = await ssmClient.send(new GetParametersCommand({
+    Names: [SSM_USERPROFILE_TABLE, SSM_PROFILE_EXTRACTOR_ARN],
+  }));
+  const params = Object.fromEntries(
+    (resp.Parameters ?? []).map(p => [p.Name!, p.Value!])
+  );
+  cachedUserProfileTable = params[SSM_USERPROFILE_TABLE];
+  cachedExtractorArn = params[SSM_PROFILE_EXTRACTOR_ARN];
+  if (!cachedUserProfileTable || !cachedExtractorArn) {
+    throw new Error(
+      `SSM config missing — tableName=${cachedUserProfileTable}, extractorArn=${cachedExtractorArn}`
+    );
+  }
+  return { tableName: cachedUserProfileTable, extractorArn: cachedExtractorArn };
+}
 
 // ─── Profile fields included in the summary block ─────────────
 const PROFILE_FIELDS: readonly string[] = [
@@ -327,10 +356,10 @@ interface UserProfile {
 }
 
 // ─── Profile fetcher ─────────────────────────────────────────
-async function getProfile(userId: string): Promise<UserProfile | null> {
+async function getProfile(userId: string, tableName: string): Promise<UserProfile | null> {
   const resp = await ddb.send(
     new QueryCommand({
-      TableName: USERPROFILE_TABLE,
+      TableName: tableName,
       IndexName: 'userProfilesByUserId',
       KeyConditionExpression: 'userId = :uid',
       ExpressionAttributeValues: { ':uid': userId },
@@ -342,13 +371,16 @@ async function getProfile(userId: string): Promise<UserProfile | null> {
 
 // ─── Main handler ─────────────────────────────────────────────
 export const handler = async (event: ConversationTurnEvent): Promise<void> => {
-  // 1. Extract userId from JWT
+  // 1. Load config from SSM (cached after first cold start)
+  const { tableName, extractorArn } = await getSSMConfig();
+
+  // 2. Extract userId from JWT
   const userId = extractUserId(event);
 
-  // 2. Fetch UserProfile
-  const profile = await getProfile(userId);
+  // 3. Fetch UserProfile
+  const profile = await getProfile(userId, tableName);
 
-  // 3. Inject profile summary into system prompt
+  // 4. Inject profile summary into system prompt
   const profileBlock = buildProfileSummaryBlock(
     profile as unknown as Record<string, unknown>
   );
@@ -361,13 +393,15 @@ export const handler = async (event: ConversationTurnEvent): Promise<void> => {
     },
   };
 
-  // 4. Handle conversation turn — Amplify manages Bedrock call, tool loop, response mutation
+  // 5. Handle conversation turn — Amplify manages Bedrock call, tool loop, response mutation
   await handleConversationTurnEvent(enhancedEvent, { tools: [kbSearchTool] });
 
-  // 5. Fire-and-forget profile extraction (async, no await on response)
-  void lambdaClient.send(
+  // 6. Kick off profile extraction — InvocationType:'Event' means Lambda accepts immediately
+  // (async execution on their side). We still AWAIT the SDK call so the HTTP request
+  // completes before this Lambda process is frozen on return.
+  await lambdaClient.send(
     new InvokeCommand({
-      FunctionName: process.env.PROFILE_EXTRACTOR_ARN!,
+      FunctionName: extractorArn,
       InvocationType: 'Event',
       Payload: Buffer.from(
         JSON.stringify({

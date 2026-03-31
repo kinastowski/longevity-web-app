@@ -120,7 +120,7 @@ async function fetchMessages(
       },
       body: JSON.stringify({
         query: `query {
-          ${listQueryName}(input: { conversationId: "${conversationId}", limit: 20 }) {
+          ${listQueryName}(filter: { conversationId: { eq: "${conversationId}" } }, limit: 20) {
             items {
               role
               content { text }
@@ -130,14 +130,20 @@ async function fetchMessages(
       }),
     });
     const json = (await resp.json()) as Record<string, unknown>;
+    if (json?.errors) {
+      console.error('[profileExtractor] GraphQL errors:', JSON.stringify(json.errors));
+    }
     const data = (json?.data as Record<string, unknown>)?.[listQueryName] as
       | { items: Array<{ role: string; content: Array<{ text?: string }> }> }
       | undefined;
-    return (data?.items ?? []).map((m) => ({
+    const items = data?.items ?? [];
+    console.log(`[profileExtractor] fetchMessages: got ${items.length} messages for conversationId=${conversationId}`);
+    return items.map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: (m.content ?? []).map((c) => c.text ?? '').join(' '),
     }));
-  } catch {
+  } catch (err) {
+    console.error('[profileExtractor] fetchMessages error:', err);
     return [];
   }
 }
@@ -154,7 +160,10 @@ export const handler = async (event: ExtractorPayload): Promise<void> => {
     listQueryName,
     conversationId
   );
-  if (messages.length === 0) return;
+  if (messages.length === 0) {
+    console.log('[profileExtractor] No messages found — skipping extraction');
+    return;
+  }
 
   // 2. Call Bedrock for extraction
   const prompt = buildExtractionPrompt(messages);
@@ -170,7 +179,10 @@ export const handler = async (event: ExtractorPayload): Promise<void> => {
 
   // 3. Parse extracted facts — bail early if nothing was extracted
   const extracted = parseExtractionResponse(rawText);
-  if (Object.keys(extracted).length === 0) return;
+  if (Object.keys(extracted).length === 0) {
+    console.log('[profileExtractor] No extractable facts found — skipping DynamoDB write');
+    return;
+  }
 
   // 4. Fetch existing UserProfile (or null for first conversation)
   const profileResp = await ddb.send(

@@ -3,7 +3,9 @@ import {
   ExecuteStatementCommand,
 } from "@aws-sdk/client-rds-data";
 
-const client = new RDSDataClient({ region: process.env.AWS_REGION ?? "eu-central-1" });
+const client = new RDSDataClient({
+  region: process.env.AWS_REGION ?? "eu-west-1",
+});
 
 export const handler = async () => {
   try {
@@ -13,7 +15,7 @@ export const handler = async () => {
         secretArn: process.env.AURORA_SECRET_ARN!,
         database: "postgres",
         sql: "SELECT 1",
-      })
+      }),
     );
     console.log("Aurora warmup: OK");
   } catch (err) {
