@@ -203,6 +203,12 @@ backend.profileExtractorFn.resources.lambda.addToRolePolicy(
   "CONVERSATIONMEMORY_TABLE_NAME", conversationMemoryTable.tableName
 );
 
+const legacyFragmentTable = backend.data.resources.tables["LegacyFragment"];
+legacyFragmentTable.grantWriteData(backend.profileExtractorFn.resources.lambda);
+(backend.profileExtractorFn.resources.lambda as LambdaFunction).addEnvironment(
+  "LEGACYFRAGMENT_TABLE_NAME", legacyFragmentTable.tableName
+);
+
 backend.profileExtractorFn.resources.lambda.addToRolePolicy(
   new PolicyStatement({
     effect: Effect.ALLOW,
