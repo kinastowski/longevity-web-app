@@ -95,6 +95,7 @@ interface UserProfile {
   sleep_quality?: string | null;
   evening_routine?: string | null;
   profile_snapshot?: string | null;
+  sage_mode?: boolean | null;
 }
 
 // ─── Payload type ─────────────────────────────────────────────
