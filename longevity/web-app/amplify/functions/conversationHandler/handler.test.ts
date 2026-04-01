@@ -1,6 +1,6 @@
 // amplify/functions/conversationHandler/handler.test.ts
 import { describe, it, expect } from 'vitest';
-import { extractUserId, buildProfileSummaryBlock } from './handler.js';
+import { extractUserId, buildProfileSummaryBlock, buildSystemPromptSuffix, SAGE_PROMPT_SUFFIX } from './handler.js';
 import type { ConversationTurnEvent } from '@aws-amplify/ai-constructs/conversation/runtime';
 
 // Minimal mock of ConversationTurnEvent for tests
@@ -73,5 +73,36 @@ describe('buildProfileSummaryBlock', () => {
     const profile = { age: 38, supplements_current: [] };
     const block = buildProfileSummaryBlock(profile as Record<string, unknown>);
     expect(block).not.toContain('supplements_current');
+  });
+});
+
+describe('buildSystemPromptSuffix', () => {
+  it('returns SAGE_PROMPT_SUFFIX when sage_mode is true', () => {
+    const result = buildSystemPromptSuffix({ sage_mode: true });
+    expect(result).toBe(SAGE_PROMPT_SUFFIX);
+    expect(result).toContain('SAGE Mode');
+    expect(result).toContain('Do not give recommendations');
+  });
+
+  it('returns profile block when sage_mode is false', () => {
+    const result = buildSystemPromptSuffix({ sage_mode: false, age: 38 });
+    expect(result).toContain('User profile summary');
+    expect(result).not.toContain('SAGE Mode');
+  });
+
+  it('returns profile block when sage_mode is absent', () => {
+    const result = buildSystemPromptSuffix({ age: 38 });
+    expect(result).toContain('User profile summary');
+    expect(result).not.toContain('SAGE Mode');
+  });
+
+  it('returns empty string for null profile', () => {
+    expect(buildSystemPromptSuffix(null)).toBe('');
+  });
+
+  it('returns SAGE suffix (not profile block) even when profile has data', () => {
+    const result = buildSystemPromptSuffix({ sage_mode: true, age: 38 });
+    expect(result).toBe(SAGE_PROMPT_SUFFIX);
+    expect(result).not.toContain('"age"');
   });
 });
