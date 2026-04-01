@@ -64,6 +64,14 @@ const PROFILE_FIELDS: readonly string[] = [
   'chronotype', 'sleep_quality', 'evening_routine',
 ];
 
+export const SAGE_PROMPT_SUFFIX =
+  '\n\nYou are now in SAGE Mode. Do not give recommendations. Instead, ask one deep, open question about the user\'s lived experience with this topic. When the user responds, acknowledge with warmth and ask a follow-up. Your goal is to help the user articulate their own wisdom.';
+
+export function buildSystemPromptSuffix(profile: Record<string, unknown> | null): string {
+  if (profile?.['sage_mode'] === true) return SAGE_PROMPT_SUFFIX;
+  return buildProfileSummaryBlock(profile);
+}
+
 // ─── Expert system prompts ────────────────────────────────────
 // Full prompts moved here from a.conversation() systemPrompt fields.
 // Amplify still puts the schema systemPrompt in event.modelConfiguration.systemPrompt,
@@ -353,6 +361,7 @@ interface UserProfile {
   sleep_quality?: string | null;
   evening_routine?: string | null;
   profile_snapshot?: string | null;
+  sage_mode?: boolean | null;
 }
 
 // ─── Profile fetcher ─────────────────────────────────────────
@@ -380,8 +389,8 @@ export const handler = async (event: ConversationTurnEvent): Promise<void> => {
   // 3. Fetch UserProfile
   const profile = await getProfile(userId, tableName);
 
-  // 4. Inject profile summary into system prompt
-  const profileBlock = buildProfileSummaryBlock(
+  // 4. Build system prompt suffix — SAGE mode or profile block
+  const promptSuffix = buildSystemPromptSuffix(
     profile as unknown as Record<string, unknown>
   );
 
@@ -389,16 +398,14 @@ export const handler = async (event: ConversationTurnEvent): Promise<void> => {
     ...event,
     modelConfiguration: {
       ...event.modelConfiguration,
-      systemPrompt: event.modelConfiguration.systemPrompt + profileBlock,
+      systemPrompt: event.modelConfiguration.systemPrompt + promptSuffix,
     },
   };
 
   // 5. Handle conversation turn — Amplify manages Bedrock call, tool loop, response mutation
   await handleConversationTurnEvent(enhancedEvent, { tools: [kbSearchTool] });
 
-  // 6. Kick off profile extraction — InvocationType:'Event' means Lambda accepts immediately
-  // (async execution on their side). We still AWAIT the SDK call so the HTTP request
-  // completes before this Lambda process is frozen on return.
+  // 6. Kick off profile extraction / SAGE fragment save — fire-and-forget
   await lambdaClient.send(
     new InvokeCommand({
       FunctionName: extractorArn,
@@ -413,6 +420,7 @@ export const handler = async (event: ConversationTurnEvent): Promise<void> => {
             event.request.headers['authorization'] ||
             event.request.headers['Authorization'],
           listQueryName: event.messageHistoryQuery.listQueryName,
+          sageMode: profile?.sage_mode === true,
         })
       ),
     })
