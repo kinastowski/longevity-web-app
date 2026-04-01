@@ -12,6 +12,7 @@ const ddb = DynamoDBDocumentClient.from(
 );
 const USERPROFILE_TABLE = process.env.USERPROFILE_TABLE_NAME!;
 const CONVERSATIONMEMORY_TABLE = process.env.CONVERSATIONMEMORY_TABLE_NAME!;
+const LEGACYFRAGMENT_TABLE = process.env.LEGACYFRAGMENT_TABLE_NAME!;
 
 const bedrockClient = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'eu-west-1',
@@ -69,6 +70,11 @@ Conversation:
 ${convo}`;
 }
 
+export function extractLastUserMessage(messages: ConversationMessage[]): string | null {
+  const userMessages = messages.filter((m) => m.role === 'user');
+  return userMessages.length > 0 ? userMessages[userMessages.length - 1].content : null;
+}
+
 // ─── UserProfile shape (mirrors DynamoDB item fields) ────────
 interface UserProfile {
   id: string;
@@ -99,6 +105,7 @@ export interface ExtractorPayload {
   graphqlApiEndpoint: string;
   authToken: string;
   listQueryName: string;
+  sageMode?: boolean;
 }
 
 // ─── Message fetcher (uses user JWT → owner auth) ────────────
@@ -150,7 +157,7 @@ async function fetchMessages(
 
 // ─── Main handler ─────────────────────────────────────────────
 export const handler = async (event: ExtractorPayload): Promise<void> => {
-  const { userId, expertId, conversationId, graphqlApiEndpoint, authToken, listQueryName } =
+  const { userId, expertId, conversationId, graphqlApiEndpoint, authToken, listQueryName, sageMode } =
     event;
 
   // 1. Fetch conversation messages using user's JWT
@@ -162,6 +169,32 @@ export const handler = async (event: ExtractorPayload): Promise<void> => {
   );
   if (messages.length === 0) {
     console.log('[profileExtractor] No messages found — skipping extraction');
+    return;
+  }
+
+  // SAGE Mode branch — save last user message as LegacyFragment, skip profile extraction
+  if (sageMode) {
+    const lastMessage = extractLastUserMessage(messages);
+    if (!lastMessage) {
+      console.log('[profileExtractor] SAGE mode: no user message found — skipping LegacyFragment write');
+      return;
+    }
+    const now = new Date().toISOString();
+    await ddb.send(
+      new PutCommand({
+        TableName: LEGACYFRAGMENT_TABLE,
+        Item: {
+          id: crypto.randomUUID(),
+          userId,
+          owner: userId,
+          expertId,
+          content: lastMessage,
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+    );
+    console.log(`[profileExtractor] SAGE mode: LegacyFragment saved for userId=${userId}, expertId=${expertId}`);
     return;
   }
 
