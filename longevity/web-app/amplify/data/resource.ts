@@ -61,6 +61,8 @@ const schema = a.schema({
       onboarding_progress: a.string(),
       // snapshot — previous profile version as JSON string
       profile_snapshot: a.string(),
+      // SAGE Mode — when true, experts ask deep questions instead of giving recommendations
+      sage_mode: a.boolean(),
     })
     .secondaryIndexes((idx) => [idx("userId")])
     // Lambda access granted via backend.data.resources.tables in backend.ts (allow.resource not supported at model level)
@@ -80,6 +82,18 @@ const schema = a.schema({
     .secondaryIndexes((idx) => [idx("userId")])
     // Lambda access granted via backend.data.resources.tables in backend.ts
     // identityClaim('sub') ensures owner = Cognito sub, matching the userId from JWT sub.
+    .authorization((allow) => [allow.owner().identityClaim('sub')]),
+
+  // ─────────────────────────────────────────────
+  // LEGACY FRAGMENTS — wisdom entries saved during SAGE Mode exchanges
+  // ─────────────────────────────────────────────
+  LegacyFragment: a
+    .model({
+      userId: a.string().required(),
+      expertId: a.string().required(),
+      content: a.string().required(),
+    })
+    .secondaryIndexes((idx) => [idx("userId")])
     .authorization((allow) => [allow.owner().identityClaim('sub')]),
 
   // ─────────────────────────────────────────────
