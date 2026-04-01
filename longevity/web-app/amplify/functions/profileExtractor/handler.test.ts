@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseExtractionResponse, mergeProfile, buildExtractionPrompt } from './handler.js';
+import { parseExtractionResponse, mergeProfile, buildExtractionPrompt, extractLastUserMessage } from './handler.js';
 
 describe('parseExtractionResponse', () => {
   it('returns {} for empty JSON', () => {
@@ -63,5 +63,30 @@ describe('buildExtractionPrompt', () => {
     const prompt = buildExtractionPrompt([]);
     expect(prompt).toContain('return {}');
     expect(prompt).toContain('JSON only');
+  });
+});
+
+describe('extractLastUserMessage', () => {
+  it('returns the last user message from a mixed conversation', () => {
+    const messages = [
+      { role: 'user' as const, content: 'First message' },
+      { role: 'assistant' as const, content: 'Response' },
+      { role: 'user' as const, content: 'Second message' },
+    ];
+    expect(extractLastUserMessage(messages)).toBe('Second message');
+  });
+
+  it('returns null for an empty messages array', () => {
+    expect(extractLastUserMessage([])).toBeNull();
+  });
+
+  it('returns null when there are no user messages', () => {
+    const messages = [{ role: 'assistant' as const, content: 'Hello there.' }];
+    expect(extractLastUserMessage(messages)).toBeNull();
+  });
+
+  it('returns the only user message when there is one', () => {
+    const messages = [{ role: 'user' as const, content: 'My wisdom' }];
+    expect(extractLastUserMessage(messages)).toBe('My wisdom');
   });
 });
